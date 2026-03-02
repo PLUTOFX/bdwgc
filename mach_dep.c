@@ -315,7 +315,7 @@ GC_INNER void GC_with_callee_saves_pushed(void (*fn)(ptr_t, void *),
 
 # if defined(HAVE_PUSH_REGS)
     GC_push_regs();
-# elif defined(EMSCRIPTEN)
+# elif defined(EMSCRIPTEN) || defined(_wasm_)
     /* No-op, "registers" are pushed in GC_push_other_roots().  */
 # else
 #   if defined(UNIX_LIKE) && !defined(NO_GETCONTEXT)

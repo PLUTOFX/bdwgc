@@ -2626,7 +2626,7 @@ EXTERN_C_BEGIN
 #   include <unistd.h>
     EXTERN_C_BEGIN
 # endif
-# define GETPAGESIZE() (unsigned)getpagesize()
+# define GETPAGESIZE() 8192
 #endif
 
 #if defined(HOST_ANDROID) && !(__ANDROID_API__ >= 23) \
@@ -3340,3 +3340,34 @@ EXTERN_C_BEGIN
 EXTERN_C_END
 
 #endif /* GCCONFIG_H */
+#ifndef GCCONFIG_EXT_H
+#define GCCONFIG_EXT_H
+
+#define ALIGNMENT 4
+#define HBLKSIZE 4096
+
+#define _WASI_EMULATED_PROCESS_CLOCKS
+#define _WASI_EMULATED_SIGNAL
+#define _WASI_EMULATED_MMAN
+#define USE_MMAP_ANON
+
+extern int __data_end[];
+#define DATASTART ((ptr_t)1)
+#undef DATAEND
+#define DATAEND ((ptr_t)__data_end)
+
+inline int ___mprotect_stub(void *addr, size_t len, int prot) { return 0; }
+#define mprotect ___mprotect_stub
+
+inline ptr_t GC_wasm_get_mem(size_t bytes) {
+  ptr_t mem = malloc(bytes + HBLKSIZE);
+  return (ptr_t)(((size_t)mem + HBLKSIZE) / HBLKSIZE * HBLKSIZE);
+}
+#undef GET_MEM
+#define GET_MEM(bytes) (struct hblk *)GC_wasm_get_mem(bytes)
+
+extern uint8_t __stack_high;
+#define STACKBOTTOM ((ptr_t)&__stack_high) /* provided by the linker, and only for memory-grows-down */
+
+#define BIG 200
+#endif /* GCCONFIG_EXT_H */

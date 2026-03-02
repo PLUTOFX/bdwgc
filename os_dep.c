@@ -1304,6 +1304,7 @@ GC_INNER size_t GC_page_size = 0;
 #   endif
 #   ifdef STACKBOTTOM
       result = STACKBOTTOM;
+//      printf("[GC_get_main_stack_base] result = STACKBOTTOM: %p\n", result);
 #   else
 #     ifdef HEURISTIC1
 #       define STACKBOTTOM_ALIGNMENT_M1 ((word)STACK_GRAN - 1)
@@ -2668,7 +2669,8 @@ static void block_unmap_inner(ptr_t start_addr, size_t len)
             if (madvise(start_addr, len, MADV_DONTNEED) == -1)
               ABORT_ON_REMAP_FAIL("unmap: madvise", start_addr, len);
 #         endif
-#       elif defined(EMSCRIPTEN)
+#       elif defined(EMSCRIPTEN) || defined(__wasm__)
+          // printf("GC_unmap: no-op on wasm\n");
           /* Nothing to do, mmap(PROT_NONE) is not supported and        */
           /* mprotect() is just a no-op.                                */
 #       else
@@ -2693,7 +2695,10 @@ static void block_unmap_inner(ptr_t start_addr, size_t len)
 GC_INNER void GC_unmap(ptr_t start, size_t bytes)
 {
     ptr_t start_addr = GC_unmap_start(start, bytes);
+    // printf("GC_unmap: start= %p, bytes= %lu, start_addr= %p\n",
+    //        (void *)start, (unsigned long)bytes, (void *)start_addr);
     ptr_t end_addr = GC_unmap_end(start, bytes);
+    // printf("GC_unmap: end_addr= %p\n", (void *)end_addr);
 
     block_unmap_inner(start_addr, (size_t)(end_addr - start_addr));
 }

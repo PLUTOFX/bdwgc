@@ -1295,6 +1295,7 @@ GC_INNER void GC_mark_init(void)
  */
 GC_API void GC_CALL GC_push_all(void *bottom, void *top)
 {
+    // printf("!![GC_push_all] st bottom: %p, top: %p\n", (void*)bottom, (void*) top);
     word length;
 
     bottom = (void *)(((word)bottom + ALIGNMENT-1) & ~(ALIGNMENT-1));
@@ -1568,6 +1569,7 @@ GC_API void GC_CALL GC_print_trace(word gc_no)
 GC_ATTR_NO_SANITIZE_ADDR GC_ATTR_NO_SANITIZE_MEMORY GC_ATTR_NO_SANITIZE_THREAD
 GC_API void GC_CALL GC_push_all_eager(void *bottom, void *top)
 {
+    // printf("!![GC_push_all_eager] bottom: %p, top: %p\n", (void*)bottom, (void*) top);
     word * b = (word *)(((word) bottom + ALIGNMENT-1) & ~(ALIGNMENT-1));
     word * t = (word *)(((word) top) & ~(ALIGNMENT-1));
     REGISTER word *p;
@@ -1594,6 +1596,7 @@ GC_API void GC_CALL GC_push_all_eager(void *bottom, void *top)
 
 GC_INNER void GC_push_all_stack(ptr_t bottom, ptr_t top)
 {
+    // printf("!![GC_push_all_stack] st bottom: %p, top: %p\n", (void*)bottom, (void*) top);
 #   ifndef NEED_FIXUP_POINTER
       if (GC_all_interior_pointers
 #         if defined(THREADS) && defined(MPROTECT_VDB)

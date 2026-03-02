@@ -715,6 +715,7 @@ volatile struct A_s {
  */
 void *GC_CALLBACK reverse_test_inner(void *data)
 {
+    printf("reverse_test_inner called, %d\n", (int)(word)data);
     int i;
     sexpr b;
     sexpr c;
@@ -753,17 +754,21 @@ void *GC_CALLBACK reverse_test_inner(void *data)
 #   endif
 # endif
 
+    printf("B I G set to: %d\n", BIG);
     a_set(ints(1, 49));
+    printf("reverse_test_inner 2\n");
     b = ints(1, 50);
     c = ints(1, BIG);
     d = uncollectable_ints(1, 100);
     test_generic_malloc_or_special(d);
     e = uncollectable_ints(1, 1);
     /* Check that realloc updates object descriptors correctly */
+    printf("reverse_test_inner 3\n");
     AO_fetch_and_add1(&collectable_count);
     f = (sexpr *)GC_MALLOC(4 * sizeof(sexpr));
     f = (sexpr *)GC_REALLOC((void *)f, 6 * sizeof(sexpr));
     CHECK_OUT_OF_MEMORY(f);
+    printf("reverse_test_inner 4\n");
     AO_fetch_and_add1(&realloc_count);
     GC_PTR_STORE_AND_DIRTY(f + 5, ints(1, 17));
     AO_fetch_and_add1(&collectable_count);
@@ -798,7 +803,7 @@ void *GC_CALLBACK reverse_test_inner(void *data)
     GC_FREE((void *)e);
 
     check_ints(b,1,50);
-# ifndef EMSCRIPTEN
+# ifndef __wasi__
     check_ints(a_get(),1,49);
 # else
     /* FIXME: gctest fails unless check_ints(a_get(), ...) are skipped. */
@@ -808,7 +813,7 @@ void *GC_CALLBACK reverse_test_inner(void *data)
         b = reverse(reverse(b));
     }
     check_ints(b,1,50);
-# ifndef EMSCRIPTEN
+# ifndef __wasi__
     check_ints(a_get(),1,49);
 # endif
     for (i = 0; i < 10 * (NTHREADS+1); i++) {
@@ -828,7 +833,7 @@ void *GC_CALLBACK reverse_test_inner(void *data)
           AO_fetch_and_add1(&realloc_count);
 #       endif
     }
-# ifndef EMSCRIPTEN
+# ifndef __wasi__
     check_ints(a_get(),1,49);
 # endif
     check_ints(b,1,50);
@@ -1595,13 +1600,15 @@ void run_one_test(void)
           exit(0);
         }
 #   endif
+    GC_printf("!![test.c]分配0通过\n");
     (void)GC_call_with_alloc_lock(set_stackbottom, &thr_hndl_sb);
-
+    GC_printf("!![test.c]GC_call_with_alloc_lock通过\n");
     /* Repeated list reversal test. */
 #   ifndef NO_CLOCK
         GET_TIME(start_time);
 #   endif
         reverse_test();
+	GC_printf("!![test.c]reverse_test通过\n");
 #   ifndef NO_CLOCK
         if (print_stats) {
           GET_TIME(reverse_time);
@@ -1623,7 +1630,9 @@ void run_one_test(void)
         }
 #     endif
 #   endif /* DBG_HDRS_ALL */
+    GC_printf("!![test.c]时间通过或者没测\n");
     tree_test();
+    GC_printf("!![test.c]tree_test通过\n");
 #   ifdef TEST_WITH_SYSTEM_MALLOC
       free(calloc(1,1));
       free(realloc(NULL, 64));
@@ -1655,6 +1664,7 @@ void run_one_test(void)
       if (print_stats)
         GC_log_printf("Finished %p\n", (void *)&start_time);
 #   endif
+    GC_printf("!![test.c]run_one_test测试函数通过\n");
 }
 
 /* Execute some tests after termination of other test threads (if any). */

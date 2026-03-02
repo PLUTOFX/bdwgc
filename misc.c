@@ -2191,6 +2191,7 @@ GC_INNER struct GC_traced_stack_sect_s *GC_traced_stack_sect = NULL;
 GC_API void * GC_CALL GC_call_with_gc_active(GC_fn_type fn,
                                              void * client_data)
 {
+    // printf("GC_call_with_gc_active called in non-threads configuration\n");
     struct GC_traced_stack_sect_s stacksect;
     GC_ASSERT(GC_is_initialized);
 
@@ -2207,6 +2208,7 @@ GC_API void * GC_CALL GC_call_with_gc_active(GC_fn_type fn,
       GC_noop1(COVERT_DATAFLOW(&stacksect));
       return client_data; /* result */
     }
+    // printf("GC_call_with_gc_active 1\n");
 
     /* Setup new "stack section".       */
     stacksect.saved_stack_ptr = GC_blocked_sp;
@@ -2217,6 +2219,7 @@ GC_API void * GC_CALL GC_call_with_gc_active(GC_fn_type fn,
       /* but that probably doesn't hurt.                */
       stacksect.saved_backing_store_ptr = GC_blocked_register_sp;
 #   endif
+    // printf("GC_call_with_gc_active 2\n");
     stacksect.prev = GC_traced_stack_sect;
     GC_blocked_sp = NULL;
     GC_traced_stack_sect = &stacksect;
@@ -2224,6 +2227,7 @@ GC_API void * GC_CALL GC_call_with_gc_active(GC_fn_type fn,
     client_data = fn(client_data);
     GC_ASSERT(GC_blocked_sp == NULL);
     GC_ASSERT(GC_traced_stack_sect == &stacksect);
+    // printf("GC_call_with_gc_active 3\n");
 
 #   if defined(CPPCHECK)
       GC_noop1((word)GC_traced_stack_sect - (word)GC_blocked_sp);
@@ -2234,7 +2238,7 @@ GC_API void * GC_CALL GC_call_with_gc_active(GC_fn_type fn,
       GC_blocked_register_sp = stacksect.saved_backing_store_ptr;
 #   endif
     GC_blocked_sp = stacksect.saved_stack_ptr;
-
+    // printf("GC_call_with_gc_active 4\n");
     return client_data; /* result */
 }
 
