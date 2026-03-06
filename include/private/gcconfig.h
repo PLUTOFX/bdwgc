@@ -704,6 +704,13 @@ EXTERN_C_BEGIN
 #   define mach_type_known
 # endif
 
+# if defined(__wasm__) && !defined(__EMSCRIPTEN__)
+    /* Non-Emscripten WebAssembly target (e.g., wasm32-wasi or           */
+    /* wasm32-unknown-unknown).                                          */
+#   define WASM
+#   define mach_type_known
+# endif
+
 /* Feel free to add more clauses here */
 
 /* Or manually define the machine type here.  A machine type is         */
@@ -2528,6 +2535,33 @@ EXTERN_C_BEGIN
 #   endif
 # endif /* RISCV */
 
+# ifdef WASM
+#   define MACH_TYPE "WASM"
+#   ifdef __wasm64__
+#     define CPP_WORDSZ 64
+#     define ALIGNMENT 8
+#   else
+#     define CPP_WORDSZ 32
+#     define ALIGNMENT 4
+#   endif
+#   ifdef __wasi__
+#     define OS_TYPE "WASI"
+      /* Enable WASI SDK emulation layers required by bdwgc.             */
+#     define _WASI_EMULATED_PROCESS_CLOCKS
+#     define _WASI_EMULATED_SIGNAL
+#     define _WASI_EMULATED_MMAN
+#     define USE_MMAP_ANON   /* anonymous mmap via WASI SDK emulation   */
+#   else
+#     define OS_TYPE "WASM"
+#   endif
+    extern int __data_end[];
+#   define DATASTART ((ptr_t)1)   /* avoid null; GC roots registered explicitly */
+#   define DATAEND ((ptr_t)(__data_end))
+    extern uint8_t __stack_high; /* linker-provided initial stack pointer  */
+#   define STACKBOTTOM ((ptr_t)(&__stack_high))
+#   define STACK_GROWS_DOWN
+# endif /* WASM */
+
 #if defined(__GLIBC__) && !defined(DONT_USE_LIBC_PRIVATES)
   /* Use glibc's stack-end marker. */
 # define USE_LIBC_PRIVATES
@@ -3328,6 +3362,9 @@ EXTERN_C_BEGIN
 # elif defined(HAIKU)
     ptr_t GC_haiku_get_mem(size_t bytes);
 #   define GET_MEM(bytes) (struct hblk*)GC_haiku_get_mem(bytes)
+# elif defined(WASM)
+    ptr_t GC_wasm_get_mem(size_t bytes);
+#   define GET_MEM(bytes) (struct hblk *)GC_wasm_get_mem(bytes)
 # elif defined(EMSCRIPTEN_TINY)
     void *emmalloc_memalign(size_t alignment, size_t size);
 #   define GET_MEM(bytes) (struct hblk*)emmalloc_memalign(GC_page_size, bytes)
@@ -3340,34 +3377,16 @@ EXTERN_C_BEGIN
 EXTERN_C_END
 
 #endif /* GCCONFIG_H */
-#ifndef GCCONFIG_EXT_H
-#define GCCONFIG_EXT_H
 
-#define ALIGNMENT 4
-#define HBLKSIZE 4096
-
-#define _WASI_EMULATED_PROCESS_CLOCKS
-#define _WASI_EMULATED_SIGNAL
-#define _WASI_EMULATED_MMAN
-#define USE_MMAP_ANON
-
-extern int __data_end[];
-#define DATASTART ((ptr_t)1)
-#undef DATAEND
-#define DATAEND ((ptr_t)__data_end)
-
-inline int ___mprotect_stub(void *addr, size_t len, int prot) { return 0; }
-#define mprotect ___mprotect_stub
-
-inline ptr_t GC_wasm_get_mem(size_t bytes) {
-  ptr_t mem = malloc(bytes + HBLKSIZE);
-  return (ptr_t)(((size_t)mem + HBLKSIZE) / HBLKSIZE * HBLKSIZE);
-}
-#undef GET_MEM
-#define GET_MEM(bytes) (struct hblk *)GC_wasm_get_mem(bytes)
-
-extern uint8_t __stack_high;
-#define STACKBOTTOM ((ptr_t)&__stack_high) /* provided by the linker, and only for memory-grows-down */
-
-#define BIG 200
-#endif /* GCCONFIG_EXT_H */
+#if defined(WASM)
+# ifndef GCCONFIG_EXT_H
+# define GCCONFIG_EXT_H
+  /* mprotect() is not meaningful on WASM; substitute a no-op.          */
+  static int GC_mprotect_noop(void *addr, size_t len, int prot)
+  {
+    (void)addr; (void)len; (void)prot;
+    return 0;
+  }
+# define mprotect GC_mprotect_noop
+# endif /* GCCONFIG_EXT_H */
+#endif /* WASM */

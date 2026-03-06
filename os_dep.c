@@ -1234,6 +1234,12 @@ GC_INNER size_t GC_page_size = 0;
     return (ptr_t)GC_get_main_symbian_stack_base();
   }
 # define GET_MAIN_STACKBASE_SPECIAL
+#elif defined(WASM)
+  ptr_t GC_get_main_stack_base(void)
+  {
+    return STACKBOTTOM;
+  }
+# define GET_MAIN_STACKBASE_SPECIAL
 #elif defined(EMSCRIPTEN)
 # include <emscripten.h>
 
@@ -2177,7 +2183,8 @@ void GC_register_data_segments(void)
      && !defined(USE_WINALLOC) && !defined(MACOS) && !defined(DOS4GW) \
      && !defined(NINTENDO_SWITCH) && !defined(NONSTOP) \
      && !defined(SN_TARGET_ORBIS) && !defined(SN_TARGET_PS3) \
-     && !defined(SN_TARGET_PSP2) && !defined(RTEMS) && !defined(__CC_ARM)
+     && !defined(SN_TARGET_PSP2) && !defined(RTEMS) && !defined(__CC_ARM) \
+     && !defined(WASM)
 
 # define SBRK_ARG_T ptrdiff_t
 
@@ -2571,6 +2578,24 @@ void * os2_alloc(size_t bytes)
   }
 #endif /* HAIKU */
 
+#if defined(WASM)
+# include <stdlib.h>
+  ptr_t GC_wasm_get_mem(size_t bytes)
+  {
+    ptr_t mem;
+    size_t offset;
+
+    GC_ASSERT(GC_page_size != 0);
+    mem = (ptr_t)malloc(bytes + GC_page_size);
+    if (NULL == mem) return NULL;
+    /* Round up to the next GC_page_size (HBLKSIZE) boundary.          */
+    offset = (size_t)mem & (GC_page_size - 1);
+    if (offset != 0)
+      mem += GC_page_size - offset;
+    return mem;
+  }
+#endif /* WASM */
+
 #if (defined(USE_MUNMAP) || defined(MPROTECT_VDB)) && !defined(USE_WINALLOC)
 # define ABORT_ON_REMAP_FAIL(C_msg_prefix, start_addr, len) \
         ABORT_ARG3(C_msg_prefix " failed", \
@@ -2669,7 +2694,7 @@ static void block_unmap_inner(ptr_t start_addr, size_t len)
             if (madvise(start_addr, len, MADV_DONTNEED) == -1)
               ABORT_ON_REMAP_FAIL("unmap: madvise", start_addr, len);
 #         endif
-#       elif defined(EMSCRIPTEN) || defined(__wasm__)
+#       elif defined(EMSCRIPTEN) || defined(WASM)
           // printf("GC_unmap: no-op on wasm\n");
           /* Nothing to do, mmap(PROT_NONE) is not supported and        */
           /* mprotect() is just a no-op.                                */
