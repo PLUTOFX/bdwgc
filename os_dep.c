@@ -1240,7 +1240,12 @@ GC_INNER size_t GC_page_size = 0;
 #elif defined(WASM)
   ptr_t GC_get_main_stack_base(void)
   {
-    return STACKBOTTOM;
+    ptr_t bottom = STACKBOTTOM;
+#   ifdef STACK_MIN_ADDR
+      /* Sanity check: STACKBOTTOM must be above STACK_MIN_ADDR.          */
+      GC_ASSERT((word)bottom > (word)STACK_MIN_ADDR);
+#   endif
+    return bottom;
   }
 # define GET_MAIN_STACKBASE_SPECIAL
 #elif defined(EMSCRIPTEN)
@@ -2583,6 +2588,44 @@ void * os2_alloc(size_t bytes)
 
 #if defined(WASM)
 # include <stdlib.h>
+  /* Allocate GC heap memory for WebAssembly targets.                     */
+  /* The returned pointer MUST be HBLKSIZE-aligned because GET_MEM() for  */
+  /* WASM calls GC_wasm_get_mem() directly without additional alignment.  */
+  /* posix_memalign() guarantees the alignment; GC_page_size is set to    */
+  /* HBLKSIZE (4096 bytes) for WASM in GC_setpagesize().                  */
+# if defined(__wasi__) && defined(_WASI_EMULATED_MMAN)
+    /* On WASI with the mmap emulation layer, use mmap(MAP_ANONYMOUS) so  */
+    /* the GC heap is obtained via a dedicated allocation path.  The size  */
+    /* is rounded up to GC_page_size so the returned range is fully       */
+    /* HBLKSIZE-aligned and the emulated mmap is not called with sub-page  */
+    /* granularity.  If mmap fails or returns a mis-aligned address, fall  */
+    /* back to posix_memalign which always honours the alignment argument. */
+#   include <sys/mman.h>
+  ptr_t GC_wasm_get_mem(size_t bytes)
+  {
+    void *mem;
+
+    GC_ASSERT(GC_page_size != 0);
+    mem = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (mem != MAP_FAILED
+        && ((word)mem & (GC_page_size - 1)) == 0 /* HBLKSIZE-aligned? */)
+      return (ptr_t)mem;
+    /* mmap failed or returned unaligned memory (possible with the WASI   */
+    /* emulated mmap which uses malloc internally); try posix_memalign.   */
+    if (mem != MAP_FAILED) {
+      /* Best-effort release of the misaligned mapping.  If this fails,   */
+      /* we accept the leak and proceed: GC correctness is not affected.  */
+      if (munmap(mem, bytes) != 0)
+        WARN("GC_wasm_get_mem: munmap of misaligned mmap region failed\n", 0);
+    }
+    if (posix_memalign(&mem, GC_page_size, bytes) == 0)
+      return (ptr_t)mem;
+    return NULL;
+  }
+# else
+    /* Bare WASM (non-WASI) or WASI without mmap emulation: use           */
+    /* posix_memalign for HBLKSIZE-aligned allocation from the C heap.    */
   ptr_t GC_wasm_get_mem(size_t bytes)
   {
     void *mem;
@@ -2592,6 +2635,7 @@ void * os2_alloc(size_t bytes)
       return (ptr_t)mem;
     return NULL;
   }
+# endif
 #endif /* WASM */
 
 #if (defined(USE_MUNMAP) || defined(MPROTECT_VDB)) && !defined(USE_WINALLOC)

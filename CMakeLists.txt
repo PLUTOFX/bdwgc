@@ -156,6 +156,31 @@ set(_HOST ${CMAKE_SYSTEM_PROCESSOR}-unknown-${CMAKE_SYSTEM})
 string(TOLOWER ${_HOST} HOST)
 message(STATUS "TARGET = ${HOST}")
 
+# Detect WebAssembly (wasm32/wasm64) target and automatically apply
+# the required constraints: no threads, no incremental GC, no munmap,
+# no dynamic loading.  These can still be overridden explicitly on the
+# cmake command line.
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^wasm" OR
+    CMAKE_C_COMPILER_TARGET MATCHES "wasm32|wasm64")
+  message(STATUS "WebAssembly target detected - applying WASM defaults")
+  set(GC_IS_WASM TRUE)
+  # Threads are not supported for standard WASM/WASI targets.
+  if (enable_threads)
+    message(STATUS "WASM: disabling threads (not supported on this target)")
+    set(enable_threads OFF CACHE BOOL "Support threads" FORCE)
+  endif()
+  # munmap/mmap-based unmapping is not meaningful without mprotect.
+  if (enable_munmap)
+    message(STATUS "WASM: disabling munmap (not supported on this target)")
+    set(enable_munmap OFF CACHE BOOL "Return page to the OS if empty for N collections" FORCE)
+  endif()
+  # Dynamic library loading is unavailable on WASM.
+  if (enable_dynamic_loading)
+    message(STATUS "WASM: disabling dynamic loading (not supported on this target)")
+    set(enable_dynamic_loading OFF CACHE BOOL "Enable tracing of dynamic library data roots" FORCE)
+  endif()
+endif()
+
 if (enable_threads)
   find_package(Threads REQUIRED)
   message(STATUS "Thread library: ${CMAKE_THREAD_LIBS_INIT}")

@@ -511,6 +511,19 @@ GC_INNER ptr_t GC_approx_sp(void)
                                && !defined(STACK_NOT_SCANNED))
         /* TODO: Use GC_GNUC_PREREQ after fixing a bug in cppcheck. */
         sp = (word)__builtin_frame_address(0);
+#     if defined(WASM)
+          /* On WASM/clang, __builtin_frame_address(0) reads the current  */
+          /* C shadow-stack pointer (__stack_pointer WebAssembly global).  */
+          /* Guard against a zero return (which would cause the GC to scan */
+          /* from address 0) by falling back to a local variable address.  */
+          /* Also clamp to STACK_MIN_ADDR so we never scan below the       */
+          /* linker-defined __stack_low boundary.                          */
+          if (0 == sp) sp = (word)&sp;
+#       ifdef STACK_MIN_ADDR
+            if ((word)sp < (word)STACK_MIN_ADDR)
+              sp = (word)STACK_MIN_ADDR;
+#       endif
+#     endif /* WASM */
 #   else
         sp = (word)&sp;
 #   endif

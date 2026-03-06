@@ -2555,15 +2555,27 @@ EXTERN_C_BEGIN
 #     define OS_TYPE "WASM"
 #   endif
     /* These linker symbols are provided by the WebAssembly linker        */
-    /* (wasm-ld) for wasm32/wasm64 targets.  They may not be available   */
-    /* in all WASM environments; ensure your linker exports them.         */
+    /* (wasm-ld) for wasm32/wasm64 targets.  They delimit the memory      */
+    /* regions used by the C shadow stack, data/BSS section and heap.    */
+    /* Memory layout (low to high addresses):                             */
+    /*   [data/BSS: __global_base .. __data_end]                          */
+    /*   [shadow stack (grows down): __stack_low .. __stack_high]         */
+    /*   [heap: __heap_base .. end of linear memory]                      */
     extern int __global_base[];  /* start of the data/BSS section        */
     extern int __data_end[];     /* end of data/BSS section              */
 #   define DATASTART ((ptr_t)(__global_base))
 #   define DATAEND ((ptr_t)(__data_end))
+    /* __stack_high is the initial (cold/high-addr) end of the C shadow   */
+    /* stack; the stack pointer starts here and grows towards __stack_low.*/
     extern uint8_t __stack_high; /* linker-provided initial stack pointer  */
+    extern uint8_t __stack_low;  /* linker-provided low bound of shadow stack */
+    extern uint8_t __heap_base;  /* linker-provided start of heap region  */
 #   define STACKBOTTOM ((ptr_t)(&__stack_high))
 #   define STACK_GROWS_DOWN
+    /* When scanning the C shadow stack we must not venture below         */
+    /* __stack_low, even if GC_approx_sp() returns a seemingly lower      */
+    /* value due to compiler quirks.                                      */
+#   define STACK_MIN_ADDR ((ptr_t)(&__stack_low))
     /* WASM does not support incremental GC (no mprotect-based dirty      */
     /* page tracking) or dynamic library loading.                        */
 #   define GC_DISABLE_INCREMENTAL
