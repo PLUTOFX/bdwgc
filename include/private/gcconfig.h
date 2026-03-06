@@ -2554,6 +2554,9 @@ EXTERN_C_BEGIN
 #   else
 #     define OS_TYPE "WASM"
 #   endif
+    /* These linker symbols are provided by the WebAssembly linker        */
+    /* (wasm-ld) for wasm32/wasm64 targets.  They may not be available   */
+    /* in all WASM environments; ensure your linker exports them.         */
     extern int __data_end[];
 #   define DATASTART ((ptr_t)1)   /* avoid null; GC roots registered explicitly */
 #   define DATAEND ((ptr_t)(__data_end))
@@ -3382,7 +3385,7 @@ EXTERN_C_END
 # ifndef GCCONFIG_EXT_H
 # define GCCONFIG_EXT_H
   /* mprotect() is not meaningful on WASM; substitute a no-op.          */
-  static int GC_mprotect_noop(void *addr, size_t len, int prot)
+  static inline int GC_mprotect_noop(void *addr, size_t len, int prot)
   {
     (void)addr; (void)len; (void)prot;
     return 0;

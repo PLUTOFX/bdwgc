@@ -2582,17 +2582,12 @@ void * os2_alloc(size_t bytes)
 # include <stdlib.h>
   ptr_t GC_wasm_get_mem(size_t bytes)
   {
-    ptr_t mem;
-    size_t offset;
+    void *mem;
 
     GC_ASSERT(GC_page_size != 0);
-    mem = (ptr_t)malloc(bytes + GC_page_size);
-    if (NULL == mem) return NULL;
-    /* Round up to the next GC_page_size (HBLKSIZE) boundary.          */
-    offset = (size_t)mem & (GC_page_size - 1);
-    if (offset != 0)
-      mem += GC_page_size - offset;
-    return mem;
+    if (posix_memalign(&mem, GC_page_size, bytes) == 0)
+      return (ptr_t)mem;
+    return NULL;
   }
 #endif /* WASM */
 
