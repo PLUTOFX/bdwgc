@@ -29,6 +29,9 @@
 #include <stdio.h>
 #if defined(MSWINCE) || defined(SN_TARGET_PS3)
 # define SIGSEGV 0 /* value is irrelevant */
+#elif defined(WASM) && !defined(__wasi__)
+  /* Bare WASM (non-WASI) has no signal support; define a stub SIGSEGV.  */
+# define SIGSEGV 0
 #else
 # include <signal.h>
 #endif
@@ -2832,6 +2835,11 @@ GC_INNER void GC_unmap_gap(ptr_t start1, size_t bytes1, ptr_t start2,
       /* but hopefully the latter is only required for gctest.  */
       emscripten_scan_registers(scan_regs_cb);
     }
+
+# elif defined(WASM)
+    /* WASM local variables are managed by the VM and cannot be scanned  */
+    /* directly; the C shadow stack (sp..STACKBOTTOM) is scanned instead. */
+#   define GC_default_push_other_roots 0
 
 # else
 #   define GC_default_push_other_roots 0

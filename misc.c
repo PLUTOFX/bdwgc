@@ -21,7 +21,12 @@
 #include <stdarg.h>
 
 #ifndef MSWINCE
-# include <signal.h>
+# if defined(WASM) && !defined(__wasi__)
+    /* Bare WASM (non-WASI) has no signal support; define a stub SIGSEGV.*/
+#   define SIGSEGV 0
+# else
+#   include <signal.h>
+# endif
 #endif
 
 #ifdef GC_SOLARIS_THREADS

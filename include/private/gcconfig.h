@@ -2557,12 +2557,19 @@ EXTERN_C_BEGIN
     /* These linker symbols are provided by the WebAssembly linker        */
     /* (wasm-ld) for wasm32/wasm64 targets.  They may not be available   */
     /* in all WASM environments; ensure your linker exports them.         */
-    extern int __data_end[];
-#   define DATASTART ((ptr_t)1)   /* avoid null; GC roots registered explicitly */
+    extern int __global_base[];  /* start of the data/BSS section        */
+    extern int __data_end[];     /* end of data/BSS section              */
+#   define DATASTART ((ptr_t)(__global_base))
 #   define DATAEND ((ptr_t)(__data_end))
     extern uint8_t __stack_high; /* linker-provided initial stack pointer  */
 #   define STACKBOTTOM ((ptr_t)(&__stack_high))
 #   define STACK_GROWS_DOWN
+    /* WASM does not support incremental GC (no mprotect-based dirty      */
+    /* page tracking) or dynamic library loading.                        */
+#   define GC_DISABLE_INCREMENTAL
+#   define IGNORE_DYNAMIC_LOADING
+    /* WebAssembly memory is never executable; avoid setting PROT_EXEC.  */
+#   define NO_EXECUTE_PERMISSION
 # endif /* WASM */
 
 #if defined(__GLIBC__) && !defined(DONT_USE_LIBC_PRIVATES)

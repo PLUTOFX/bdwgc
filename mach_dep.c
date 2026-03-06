@@ -315,8 +315,12 @@ GC_INNER void GC_with_callee_saves_pushed(void (*fn)(ptr_t, void *),
 
 # if defined(HAVE_PUSH_REGS)
     GC_push_regs();
-# elif defined(EMSCRIPTEN) || defined(WASM)
+# elif defined(EMSCRIPTEN)
     /* No-op, "registers" are pushed in GC_push_other_roots().  */
+# elif defined(WASM)
+    /* No-op: WASM local variables live in the VM stack, not in  */
+    /* addressable linear memory; the C shadow stack is scanned  */
+    /* separately via GC_push_current_stack().                   */
 # else
 #   if defined(UNIX_LIKE) && !defined(NO_GETCONTEXT)
       /* Older versions of Darwin seem to lack getcontext().    */
