@@ -97,6 +97,15 @@ AS_IF([test "x$emscripten" = "xyes"],
 AM_CONDITIONAL(EMSCRIPTEN, test x$emscripten = xyes)
 AC_MSG_RESULT([$emscripten])
 
+AC_MSG_CHECKING([for non-Emscripten wasm target])
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([[
+#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
+#error "non-Emscripten WebAssembly target detected"
+#endif
+]])], [gc_wasm=no], [gc_wasm=yes])
+AM_CONDITIONAL(GC_WASM, test x$gc_wasm = xyes)
+AC_MSG_RESULT([$gc_wasm])
+
 GC_CFLAGS=${gc_cflags}
 AC_SUBST(GC_CFLAGS)
 
@@ -108,7 +117,8 @@ AC_ARG_ENABLE(threads,
   THREADS=$enableval,
   [ AC_MSG_CHECKING([for thread model used by GCC])
     THREADS=`$CC -v 2>&1 | sed -n 's/^Thread model: //p'`
-    if test -z "$THREADS" -o "x$emscripten" = "xyes"; then
+    if test -z "$THREADS" -o "x$emscripten" = "xyes" \
+            -o "x$gc_wasm" = "xyes"; then
       THREADS=no
     fi
     if test "$THREADS" = "posix"; then
