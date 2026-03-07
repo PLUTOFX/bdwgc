@@ -2604,6 +2604,17 @@ GC_API GC_word GC_CALL GC_get_max_retries(void)
     return GC_max_retries;
 }
 
+GC_API void GC_CALL GC_set_large_alloc_warn_interval(long value)
+{
+    GC_ASSERT(value != 0);
+    GC_large_alloc_warn_interval = value;
+}
+
+GC_API long GC_CALL GC_get_large_alloc_warn_interval(void)
+{
+    return GC_large_alloc_warn_interval;
+}
+
 GC_API void GC_CALL GC_set_dont_precollect(int value)
 {
     GC_ASSERT(value != -1); /* -1 was used to retrieve old value in gc-7.2 */

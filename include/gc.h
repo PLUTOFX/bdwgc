@@ -348,6 +348,19 @@ GC_API GC_ATTR_DEPRECATED GC_word GC_max_retries;
 GC_API void GC_CALL GC_set_max_retries(GC_word);
 GC_API GC_word GC_CALL GC_get_max_retries(void);
 
+/* Controls how often the "repeated allocation of very large block"     */
+/* warning is emitted.  The GC suppresses the warning until it has      */
+/* been triggered GC_large_alloc_warn_interval times since the last     */
+/* emission (or since start-up), then prints the warning and resets the */
+/* counter.  The default value is GC_LARGE_ALLOC_WARN_INTERVAL (5).    */
+/* Set to 1 to warn on every occurrence; set to LONG_MAX to suppress    */
+/* the warning entirely (equivalent to the GC_NO_BLACKLIST_WARNING      */
+/* environment variable).  The setter and getter are unsynchronized, so */
+/* GC_call_with_alloc_lock() is required to avoid data races (if the    */
+/* value is modified after the GC is put to multi-threaded mode).       */
+GC_API void GC_CALL GC_set_large_alloc_warn_interval(long);
+GC_API long GC_CALL GC_get_large_alloc_warn_interval(void);
+
 
 GC_API GC_ATTR_DEPRECATED char *GC_stackbottom;
                                 /* The cold end (bottom) of user stack. */

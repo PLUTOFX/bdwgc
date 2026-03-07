@@ -187,6 +187,86 @@ wasmtime myapp.wasm
 
 ---
 
+## Diagnosing Common GC Warnings and Errors
+
+### "Repeated allocation of very large block" warning
+
+When the GC prints:
+
+```
+GC Warning: Repeated allocation of very large block (appr. size N):
+        May lead to memory leak and poor performance
+```
+
+this means the GC found a large free block but all candidate positions
+within it overlap with *blacklisted* addresses — addresses that are
+suspected false pointers (integers in scanned memory whose value
+coincidentally falls inside the heap).  Rather than growing the heap
+unboundedly, the GC reuses the block anyway and emits the warning.
+
+On WASM this warning is especially common because:
+
+* The GC heap is obtained via `posix_memalign` (or the WASI mmap
+  emulation), so it is interleaved with the C runtime's own heap.
+  Allocator metadata and padding bytes can contain values that look like
+  interior heap pointers, causing aggressive blacklisting.
+* WASM linear memory is flat and starts at address 0, which maximises
+  the overlap between integer constants in code and heap addresses.
+
+**Recommended fixes:**
+
+1. **Use `GC_malloc_ignore_off_page()` for large allocations.**
+   This variant tells the GC not to avoid blocks that would introduce
+   a false off-page reference, eliminating the trigger for the warning:
+
+   ```c
+   char *big_buf = GC_malloc_ignore_off_page(495616);
+   ```
+
+2. **Suppress or adjust the warning interval programmatically.**
+   The new `GC_set_large_alloc_warn_interval()` API allows fine-grained
+   control without touching environment variables:
+
+   ```c
+   #include <limits.h>
+   #include <gc.h>
+
+   /* Suppress the warning entirely (equivalent to GC_NO_BLACKLIST_WARNING). */
+   GC_set_large_alloc_warn_interval(LONG_MAX);
+
+   /* Or emit it on every occurrence (useful for debugging). */
+   GC_set_large_alloc_warn_interval(1);
+   ```
+
+   Alternatively, set the `GC_NO_BLACKLIST_WARNING` environment variable
+   before the process starts, or set `GC_LARGE_ALLOC_WARN_INTERVAL` to
+   the desired repeat count.
+
+3. **Reduce false pointers by keeping the heap small.**
+   Call `GC_set_free_space_divisor()` with a larger value (e.g. 4–8)
+   so that the GC collects more aggressively and the heap stays compact.
+
+### WASM trap / "failed to run main module" error
+
+A WASM trap (e.g. from `wasmtime` reporting an error such as
+`error while executing at wasm backtrace: 0: 0x... - `) immediately
+after or alongside the large-block warning is typically caused by:
+
+* **Memory exhaustion**: the GC could not satisfy an allocation after
+  exhausting all expansion attempts (→ `ABORT` / `abort()` which
+  becomes a WASM `unreachable` trap).
+* **Premature object collection**: a live pointer existed only in a WASM
+  local (not on the C shadow stack), so the GC freed it; dereferencing
+  the dangling pointer then traps.
+
+Apply the mitigations listed above (use `GC_malloc_ignore_off_page()`
+for large allocations and keep live pointers in addressed locals or
+globals) and ensure the binary is compiled with
+`-fno-omit-frame-pointer` so that pointers are spilled to the shadow
+stack.
+
+---
+
 ## Configuration Macros Set Automatically for WASM
 
 | Macro | Effect |
