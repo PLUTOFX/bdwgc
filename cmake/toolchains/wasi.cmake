@@ -62,8 +62,16 @@ set(CMAKE_CXX_COMPILER_TARGET ${triple} CACHE STRING "C++ compiler target triple
 
 # Sysroot and ABI flags.
 set(CMAKE_SYSROOT "${WASI_SYSROOT}")
-set(CMAKE_C_FLAGS_INIT   "--sysroot=${WASI_SYSROOT}")
-set(CMAKE_CXX_FLAGS_INIT "--sysroot=${WASI_SYSROOT}")
+# -fno-omit-frame-pointer is required for correct GC root scanning.
+# The GC scans the C shadow stack (from __builtin_frame_address(0) to
+# STACKBOTTOM = __stack_high) to find live heap pointers.  Without this
+# flag, the compiler may omit the shadow-stack frame for leaf functions
+# and some optimized functions, causing their local pointer variables to
+# reside only in WASM VM locals (which are not in linear memory and are
+# therefore invisible to the GC).  A pointer that lives only in a WASM
+# local can be collected prematurely, causing a use-after-free crash.
+set(CMAKE_C_FLAGS_INIT   "--sysroot=${WASI_SYSROOT} -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_INIT "--sysroot=${WASI_SYSROOT} -fno-omit-frame-pointer")
 
 # Linker flags: export the standard wasm-ld symbols required by bdwgc.
 # The GC uses __global_base, __data_end, __stack_high, __stack_low, and

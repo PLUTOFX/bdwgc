@@ -142,7 +142,9 @@ into your wasm32-wasi executable.
 
 > **Important:** Pass `-fno-omit-frame-pointer` (and prefer `-O1` or `-O0`
 > over `-O2`/`-O3`) to maximise the amount of pointer data spilled to the
-> C shadow stack, reducing the risk of premature collection.
+> C shadow stack, reducing the risk of premature collection.  When using
+> the bundled `cmake/toolchains/wasi.cmake` toolchain file, this flag is
+> already added to the default compile flags.
 
 ---
 
@@ -204,47 +206,41 @@ suspected false pointers (integers in scanned memory whose value
 coincidentally falls inside the heap).  Rather than growing the heap
 unboundedly, the GC reuses the block anyway and emits the warning.
 
-On WASM this warning is especially common because:
+The root causes of this warning on WASM are addressed in the library:
 
-* The GC heap is obtained via `posix_memalign` (or the WASI mmap
-  emulation), so it is interleaved with the C runtime's own heap.
-  Allocator metadata and padding bytes can contain values that look like
-  interior heap pointers, causing aggressive blacklisting.
-* WASM linear memory is flat and starts at address 0, which maximises
-  the overlap between integer constants in code and heap addresses.
+1. **Heap separation via `memory.grow`**: `GC_wasm_get_mem()` now uses
+   the WASM `memory.grow` instruction to allocate GC heap pages above
+   the current top of linear memory — above the C runtime's malloc heap
+   (which starts at `__heap_base` and grows upward via `sbrk`).
+   This physically separates the GC heap from malloc metadata, eliminating
+   the most common source of false-pointer blacklisting.
 
-**Recommended fixes:**
+2. **Automatic `IGNORE_OFF_PAGE` for large allocations**: `GC_malloc()`
+   and `GC_MALLOC()` automatically use `IGNORE_OFF_PAGE` semantics for
+   large allocations (objects larger than `MAXOBJBYTES`, approximately
+   one `HBLKSIZE`).  This means the blacklist is checked only at
+   one-page granularity rather than over the full allocation size,
+   making it far less likely that a large block is considered fully
+   blacklisted.
 
-1. **Use `GC_malloc_ignore_off_page()` for large allocations.**
-   This variant tells the GC not to avoid blocks that would introduce
-   a false off-page reference, eliminating the trigger for the warning:
+3. **Larger initial `GC_black_list_spacing`**: The blacklist spacing
+   threshold (`BL_LIMIT`) is initialised to `MAXHINCR * HBLKSIZE` on
+   WASM, which is much larger than the default `MINHINCR * HBLKSIZE`
+   used on other platforms.  This raises the threshold at which the
+   "punt" warning fires.
 
-   ```c
-   char *big_buf = GC_malloc_ignore_off_page(495616);
-   ```
+4. **Larger initial heap**: The GC starts with `4 * MINHINCR * HBLKSIZE`
+   of heap (instead of `MINHINCR * HBLKSIZE`) on WASM to reduce the
+   number of GC cycles that occur before `GC_black_list_spacing` has
+   been calibrated by `GC_promote_black_lists()`.
 
-2. **Suppress or adjust the warning interval programmatically.**
-   The new `GC_set_large_alloc_warn_interval()` API allows fine-grained
-   control without touching environment variables:
+If the warning still appears after these mitigations (e.g., when the
+GC falls back to `posix_memalign` because `memory.grow` is unavailable),
+you can additionally:
 
-   ```c
-   #include <limits.h>
-   #include <gc.h>
-
-   /* Suppress the warning entirely (equivalent to GC_NO_BLACKLIST_WARNING). */
-   GC_set_large_alloc_warn_interval(LONG_MAX);
-
-   /* Or emit it on every occurrence (useful for debugging). */
-   GC_set_large_alloc_warn_interval(1);
-   ```
-
-   Alternatively, set the `GC_NO_BLACKLIST_WARNING` environment variable
-   before the process starts, or set `GC_LARGE_ALLOC_WARN_INTERVAL` to
-   the desired repeat count.
-
-3. **Reduce false pointers by keeping the heap small.**
-   Call `GC_set_free_space_divisor()` with a larger value (e.g. 4–8)
-   so that the GC collects more aggressively and the heap stays compact.
+* Use `GC_malloc_ignore_off_page()` explicitly for large allocations.
+* Adjust the warning interval with the `GC_set_large_alloc_warn_interval()`
+  API (see "Public API" below).
 
 ### WASM trap / "failed to run main module" error
 
@@ -254,16 +250,32 @@ after or alongside the large-block warning is typically caused by:
 
 * **Memory exhaustion**: the GC could not satisfy an allocation after
   exhausting all expansion attempts (→ `ABORT` / `abort()` which
-  becomes a WASM `unreachable` trap).
+  becomes a WASM `unreachable` trap).  The improvements above
+  (heap separation and `IGNORE_OFF_PAGE`) greatly reduce this risk.
 * **Premature object collection**: a live pointer existed only in a WASM
   local (not on the C shadow stack), so the GC freed it; dereferencing
-  the dangling pointer then traps.
+  the dangling pointer then traps.  The toolchain file now sets
+  `-fno-omit-frame-pointer` by default to spill locals to the shadow
+  stack.
 
-Apply the mitigations listed above (use `GC_malloc_ignore_off_page()`
-for large allocations and keep live pointers in addressed locals or
-globals) and ensure the binary is compiled with
-`-fno-omit-frame-pointer` so that pointers are spilled to the shadow
-stack.
+### Public API for warning control
+
+```c
+#include <gc.h>
+#include <limits.h>
+
+/* Suppress the "repeated large block" warning entirely. */
+GC_set_large_alloc_warn_interval(LONG_MAX);
+
+/* Or emit it on every occurrence (useful for debugging). */
+GC_set_large_alloc_warn_interval(1);
+
+long interval = GC_get_large_alloc_warn_interval();
+```
+
+Alternatively, set the `GC_NO_BLACKLIST_WARNING` or
+`GC_LARGE_ALLOC_WARN_INTERVAL` environment variables before the
+process starts.
 
 ---
 
@@ -287,6 +299,8 @@ stack.
 | `_WASI_EMULATED_SIGNAL` | WASI signal emulation (WASI only) |
 | `_WASI_EMULATED_MMAN` | WASI mmap emulation (WASI only) |
 
-For WASI targets, `GC_wasm_get_mem()` uses `mmap(MAP_ANONYMOUS)` via the
-WASI mmap emulation layer for GC heap expansion.  For bare WASM targets
-(no WASI), `posix_memalign` is used as a fallback.
+`GC_wasm_get_mem()` uses the WASM `memory.grow` instruction as the
+primary allocator, falling back to `posix_memalign` if `memory.grow`
+fails.  Using `memory.grow` places GC heap pages at the top of linear
+memory, above the C runtime's malloc heap, eliminating the interleaving
+that caused false-pointer blacklisting in earlier versions.

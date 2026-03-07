@@ -49,8 +49,21 @@ STATIC word * GC_incomplete_stack_bl = NULL;
 STATIC word GC_total_stack_black_listed = 0;
                         /* Number of bytes on stack blacklist.  */
 
-GC_INNER word GC_black_list_spacing = MINHINCR * HBLKSIZE;
-                        /* Initial rough guess. */
+GC_INNER word GC_black_list_spacing =
+#if defined(WASM)
+                /* On WASM, GC_wasm_get_mem() uses memory.grow to place the   */
+                /* GC heap above the malloc heap, reducing false blacklisting. */
+                /* However, when memory.grow falls back to posix_memalign, GC  */
+                /* and malloc pages share the same address range, producing    */
+                /* false stack-pointer hits.  Start with a larger blacklist    */
+                /* spacing so large allocations (e.g. JS string/array buffers) */
+                /* do not prematurely trigger the "punt" path in              */
+                /* GC_allochblk_nth before GC_promote_black_lists() has had   */
+                /* a chance to calibrate the spacing dynamically.             */
+                MAXHINCR * HBLKSIZE;
+#else
+                MINHINCR * HBLKSIZE;  /* Initial rough guess. */
+#endif
 
 STATIC void GC_clear_bl(word *);
 

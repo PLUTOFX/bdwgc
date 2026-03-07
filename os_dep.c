@@ -2591,51 +2591,55 @@ void * os2_alloc(size_t bytes)
   /* Allocate GC heap memory for WebAssembly targets.                     */
   /* The returned pointer MUST be HBLKSIZE-aligned because GET_MEM() for  */
   /* WASM calls GC_wasm_get_mem() directly without additional alignment.  */
-  /* posix_memalign() guarantees the alignment; GC_page_size is set to    */
-  /* HBLKSIZE (4096 bytes) for WASM in GC_setpagesize().                  */
-# if defined(__wasi__) && defined(_WASI_EMULATED_MMAN)
-    /* On WASI with the mmap emulation layer, use mmap(MAP_ANONYMOUS) so  */
-    /* the GC heap is obtained via a dedicated allocation path.  The size  */
-    /* is rounded up to GC_page_size so the returned range is fully       */
-    /* HBLKSIZE-aligned and the emulated mmap is not called with sub-page  */
-    /* granularity.  If mmap fails or returns a mis-aligned address, fall  */
-    /* back to posix_memalign which always honours the alignment argument. */
-#   include <sys/mman.h>
   ptr_t GC_wasm_get_mem(size_t bytes)
   {
-    void *mem;
+    /* Use the WASM memory.grow instruction to extend linear memory for   */
+    /* the GC heap.  Each WASM page is 65536 bytes = 16 * HBLKSIZE, so   */
+    /* the returned address is always HBLKSIZE-aligned without any extra  */
+    /* alignment step.                                                    */
+    /*                                                                    */
+    /* Crucially, memory.grow allocates at the HIGH end of the current    */
+    /* linear memory, above the C runtime's malloc heap (which grows      */
+    /* upward from __heap_base via sbrk/memory.grow inside libc).  This  */
+    /* placement physically separates the GC heap from malloc-managed     */
+    /* memory, eliminating the interleaving of malloc metadata with GC   */
+    /* pages.  Without this separation, malloc metadata and padding bytes */
+    /* that reside in the same address range as the GC heap produce many  */
+    /* false interior-pointer hits during stack scanning, causing the GC  */
+    /* to blacklist large swaths of GC heap pages and triggering the      */
+    /* "Repeated allocation of very large block" warning.                 */
+    /*                                                                    */
+    /* WASM spec guarantees that newly grown pages are zero-initialized.  */
+    const size_t wasm_page_size = 65536; /* bytes per WASM memory page   */
+    const size_t pages = (bytes + wasm_page_size - 1) / wasm_page_size;
 
-    GC_ASSERT(GC_page_size != 0);
-    mem = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
-               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (mem != MAP_FAILED
-        && ((word)mem & (GC_page_size - 1)) == 0 /* HBLKSIZE-aligned? */)
-      return (ptr_t)mem;
-    /* mmap failed or returned unaligned memory (possible with the WASI   */
-    /* emulated mmap which uses malloc internally); try posix_memalign.   */
-    if (mem != MAP_FAILED) {
-      /* Best-effort release of the misaligned mapping.  If this fails,   */
-      /* we accept the leak and proceed: GC correctness is not affected.  */
-      if (munmap(mem, bytes) != 0)
-        WARN("GC_wasm_get_mem: munmap of misaligned mmap region failed\n", 0);
+    /* Guard against a pathologically large request that would overflow   */
+    /* the int argument to __builtin_wasm_memory_grow.  In practice,     */
+    /* GC_collect_or_expand bounds n to divHBLKSZ(GC_WORD_MAX), which on */
+    /* wasm32 is at most ~65536 pages, well within INT_MAX.              */
+    if (EXPECT(pages <= (size_t)INT_MAX, TRUE)) {
+      const int old_page_count = __builtin_wasm_memory_grow(0, (int)pages);
+
+      if (EXPECT(old_page_count >= 0, TRUE)) {
+        /* New pages start immediately after the old top of linear memory.*/
+        /* Multiply in size_t to avoid 32-bit overflow on wasm64.        */
+        return (ptr_t)((size_t)old_page_count * wasm_page_size);
+      }
     }
-    if (posix_memalign(&mem, GC_page_size, bytes) == 0)
-      return (ptr_t)mem;
-    return NULL;
-  }
-# else
-    /* Bare WASM (non-WASI) or WASI without mmap emulation: use           */
-    /* posix_memalign for HBLKSIZE-aligned allocation from the C heap.    */
-  ptr_t GC_wasm_get_mem(size_t bytes)
-  {
-    void *mem;
 
-    GC_ASSERT(GC_page_size != 0);
-    if (posix_memalign(&mem, GC_page_size, bytes) == 0)
-      return (ptr_t)mem;
+    /* memory.grow failed (linear address space exhausted or pages        */
+    /* argument overflows int); fall back to posix_memalign from the C   */
+    /* runtime heap.  GC_page_size is set to HBLKSIZE (4096 bytes) for  */
+    /* WASM in GC_setpagesize(), guaranteeing the required alignment.    */
+    {
+      void *mem;
+
+      GC_ASSERT(GC_page_size != 0);
+      if (posix_memalign(&mem, GC_page_size, bytes) == 0)
+        return (ptr_t)mem;
+    }
     return NULL;
   }
-# endif
 #endif /* WASM */
 
 #if (defined(USE_MUNMAP) || defined(MPROTECT_VDB)) && !defined(USE_WINALLOC)

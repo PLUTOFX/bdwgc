@@ -199,7 +199,25 @@ GC_INNER void * GC_generic_malloc_inner(size_t lb, int k)
         obj_link(op) = 0;
         GC_bytes_allocd += GRANULES_TO_BYTES((word)lg);
     } else {
-        op = (ptr_t)GC_alloc_large_and_clear(ADD_SLOP(lb), k, 0);
+#       if defined(WASM)
+          /* On WASM, GC_wasm_get_mem() uses memory.grow to place GC heap  */
+          /* above the malloc heap, reducing false-pointer blacklisting.    */
+          /* However, when memory.grow fails and posix_memalign is used as  */
+          /* a fallback, the GC heap is interleaved with the C runtime's    */
+          /* malloc heap.  Allocator metadata and padding bytes then produce */
+          /* false interior-pointer hits during stack and data-section      */
+          /* scanning, blacklisting GC heap pages.  Using IGNORE_OFF_PAGE   */
+          /* for all large allocations means the blacklist is checked only  */
+          /* at HBLKSIZE granularity (rather than over the full allocation  */
+          /* size), preventing the "Repeated allocation of very large block"*/
+          /* warning regardless of which allocation path is used.  This    */
+          /* also matches the documented recommendation in gc.h for large   */
+          /* allocations on platforms with conservative scanning.           */
+          op = (ptr_t)GC_alloc_large_and_clear(ADD_SLOP(lb), k,
+                                               IGNORE_OFF_PAGE);
+#       else
+          op = (ptr_t)GC_alloc_large_and_clear(ADD_SLOP(lb), k, 0);
+#       endif
         if (op != NULL)
             GC_bytes_allocd += lb;
     }

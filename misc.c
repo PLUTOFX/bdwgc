@@ -942,6 +942,14 @@ GC_API void GC_CALL GC_init(void)
 
 #   if defined(GC_INITIAL_HEAP_SIZE) && !defined(CPPCHECK)
       initial_heap_sz = GC_INITIAL_HEAP_SIZE;
+#   elif defined(WASM)
+      /* GC_wasm_get_mem() uses memory.grow to separate the GC heap from  */
+      /* the malloc heap, reducing false-pointer blacklisting.  However,  */
+      /* when memory.grow is unavailable or falls back to posix_memalign, */
+      /* early GC cycles can still trigger aggressive blacklisting.  Start */
+      /* with a larger initial heap to reduce the number of such cycles   */
+      /* before GC_promote_black_lists() calibrates GC_black_list_spacing.*/
+      initial_heap_sz = 4 * MINHINCR * HBLKSIZE;
 #   else
       initial_heap_sz = MINHINCR * HBLKSIZE;
 #   endif
