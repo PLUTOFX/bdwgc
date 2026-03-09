@@ -2588,58 +2588,157 @@ void * os2_alloc(size_t bytes)
 
 #if defined(WASM)
 # include <stdlib.h>
-  /* Allocate GC heap memory for WebAssembly targets.                     */
-  /* The returned pointer MUST be HBLKSIZE-aligned because GET_MEM() for  */
-  /* WASM calls GC_wasm_get_mem() directly without additional alignment.  */
-  ptr_t GC_wasm_get_mem(size_t bytes)
+
+/*
+ * GC heap allocator for WebAssembly targets.
+ *
+ * Problem with per-request memory.grow
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ * If GC_wasm_get_mem issues a separate memory.grow call for each request,
+ * the C runtime's malloc (which also uses memory.grow via sbrk) interleaves
+ * C malloc pages with GC pages.  The GC plausible pointer range spans all
+ * GC segments (min..max), and the interleaved C malloc pages fall inside that
+ * range but have no GC block headers.  Every C malloc pointer that appears
+ * on the C shadow stack during a collection maps to a null-header address
+ * inside the GC plausible range.  GC_mark_and_push_stack therefore calls
+ * GC_add_to_black_list_stack for each such address, which inflates
+ * GC_total_stack_black_listed.  GC_promote_black_lists() then shrinks
+ * GC_black_list_spacing (BL_LIMIT) to as low as 3*HBLKSIZE=12 KiB.  Any
+ * allocation larger than 12 KiB that encounters even a single blacklisted
+ * HBLK fires the "Repeated allocation of very large block" warning.
+ *
+ * Pool allocator fix
+ * ~~~~~~~~~~~~~~~~~~
+ * Allocate the GC heap as a single contiguous pool via ONE memory.grow call
+ * on the first request, before the C malloc heap has grown further.  All
+ * subsequent requests are served as bump-pointer slices out of this pool.
+ * Because the pool is contiguous:
+ *   - there are no C malloc pages interleaved within the pool, and
+ *   - C malloc pages allocated before the pool are below the pool base
+ *     (outside the GC plausible range), and
+ *   - C malloc pages allocated after pool creation are above the pool top
+ *     (also outside the GC plausible range once the pool is used up and
+ *     extended).
+ * Null-header false positives from the shadow stack therefore vanish,
+ * GC_total_stack_black_listed stays near zero, BL_LIMIT stays at
+ * MAXHINCR*HBLKSIZE, and the warning never fires.
+ *
+ * The default pool is GC_WASM_INITIAL_HEAP_PAGES WASM pages (each 65536
+ * bytes).  When the pool is exhausted a second large memory.grow is issued.
+ * If the new segment is not contiguous with the existing pool (because the
+ * C malloc heap grew between the two calls) the new segment becomes the new
+ * pool base; GC_mark_and_push_stack's WASM-specific handling (calling
+ * GC_add_to_black_list_normal directly rather than the stack blacklist) then
+ * ensures that any temporary interleaving does not shrink BL_LIMIT.
+ */
+
+/* Default initial pool: 256 WASM pages = 16 MiB.                          */
+/* Override at compile time with -DGC_WASM_INITIAL_HEAP_PAGES=<n>.         */
+#ifndef GC_WASM_INITIAL_HEAP_PAGES
+# define GC_WASM_INITIAL_HEAP_PAGES 256
+#endif
+
+/* Minimum pages per pool expansion (4 MiB) to keep expansions rare.       */
+#ifndef GC_WASM_HEAP_EXPAND_PAGES
+# define GC_WASM_HEAP_EXPAND_PAGES 64
+#endif
+
+STATIC ptr_t GC_wasm_pool_base = NULL; /* base of current pool segment     */
+STATIC size_t GC_wasm_pool_cap  = 0;   /* pool capacity in bytes           */
+STATIC size_t GC_wasm_pool_used = 0;   /* bytes already vended from pool   */
+
+/* Call memory.grow(npages) and return the base address of the new pages,   */
+/* or NULL on failure.  Each page is 65536 bytes so the returned address is */
+/* always HBLKSIZE-aligned (HBLKSIZE=4096 divides 65536).                  */
+STATIC ptr_t GC_wasm_grow_memory(int npages)
+{
+  int old = __builtin_wasm_memory_grow(0, npages);
+
+  if (EXPECT(old < 0, FALSE))
+    return NULL;
+  /* Multiply in size_t to avoid 32-bit overflow on wasm64. */
+  return (ptr_t)((size_t)(unsigned)old * (size_t)65536u);
+}
+
+/* Allocate GC heap memory for WebAssembly targets.                         */
+/* The returned pointer is guaranteed to be HBLKSIZE-aligned.              */
+ptr_t GC_wasm_get_mem(size_t bytes)
+{
+  GC_ASSERT(GC_page_size != 0);
+
+  /* First call: allocate the entire initial pool as one memory.grow call.  */
+  /* This must happen before any additional C malloc growth so the pool is  */
+  /* positioned cleanly above the existing C heap.                          */
+  if (EXPECT(GC_wasm_pool_base == NULL, FALSE)) {
+    ptr_t base = GC_wasm_grow_memory(GC_WASM_INITIAL_HEAP_PAGES);
+
+    if (base != NULL) {
+      GC_wasm_pool_base = base;
+      GC_wasm_pool_cap  = (size_t)GC_WASM_INITIAL_HEAP_PAGES * (size_t)65536u;
+      GC_wasm_pool_used = 0;
+    }
+  }
+
+  /* Serve the request as a bump-pointer slice from the current pool.       */
+  if (GC_wasm_pool_base != NULL
+        && GC_wasm_pool_used + bytes <= GC_wasm_pool_cap) {
+    ptr_t result = GC_wasm_pool_base + GC_wasm_pool_used;
+
+    GC_wasm_pool_used += bytes;
+    return result;
+  }
+
+  /* Pool exhausted.  Grow by at least GC_WASM_HEAP_EXPAND_PAGES pages.    */
   {
-    /* Use the WASM memory.grow instruction to extend linear memory for   */
-    /* the GC heap.  Each WASM page is 65536 bytes = 16 * HBLKSIZE, so   */
-    /* the returned address is always HBLKSIZE-aligned without any extra  */
-    /* alignment step.                                                    */
-    /*                                                                    */
-    /* Crucially, memory.grow allocates at the HIGH end of the current    */
-    /* linear memory, above the C runtime's malloc heap (which grows      */
-    /* upward from __heap_base via sbrk/memory.grow inside libc).  This  */
-    /* placement physically separates the GC heap from malloc-managed     */
-    /* memory, eliminating the interleaving of malloc metadata with GC   */
-    /* pages.  Without this separation, malloc metadata and padding bytes */
-    /* that reside in the same address range as the GC heap produce many  */
-    /* false interior-pointer hits during stack scanning, causing the GC  */
-    /* to blacklist large swaths of GC heap pages and triggering the      */
-    /* "Repeated allocation of very large block" warning.                 */
-    /*                                                                    */
-    /* WASM spec guarantees that newly grown pages are zero-initialized.  */
-    const size_t wasm_page_size = 65536; /* bytes per WASM memory page   */
-    const size_t pages = (bytes + wasm_page_size - 1) / wasm_page_size;
+    /* Compute pages needed, guarding against overflow in the round-up.   */
+    int extra = (bytes > (size_t)65535u)
+                    ? (int)(bytes / 65536u + (bytes % 65536u != 0 ? 1u : 0u))
+                    : 1;
 
-    /* Guard against a pathologically large request that would overflow   */
-    /* the int argument to __builtin_wasm_memory_grow.  In practice,     */
-    /* GC_collect_or_expand bounds n to divHBLKSZ(GC_WORD_MAX), which on */
-    /* wasm32 is at most ~65536 pages, well within INT_MAX.              */
-    if (EXPECT(pages <= (size_t)INT_MAX, TRUE)) {
-      const int old_page_count = __builtin_wasm_memory_grow(0, (int)pages);
+    if (extra < GC_WASM_HEAP_EXPAND_PAGES)
+      extra = GC_WASM_HEAP_EXPAND_PAGES;
 
-      if (EXPECT(old_page_count >= 0, TRUE)) {
-        /* New pages start immediately after the old top of linear memory.*/
-        /* Multiply in size_t to avoid 32-bit overflow on wasm64.        */
-        return (ptr_t)((size_t)old_page_count * wasm_page_size);
+    {
+      ptr_t new_base = GC_wasm_grow_memory(extra);
+
+      if (new_base != NULL) {
+        size_t new_cap = (size_t)extra * (size_t)65536u;
+
+        /* If the new segment is contiguous with the existing pool, extend.  */
+        if (GC_wasm_pool_base != NULL
+              && new_base == GC_wasm_pool_base + GC_wasm_pool_cap) {
+          GC_wasm_pool_cap += new_cap;
+        } else {
+          /* Non-contiguous: C malloc grew between our calls.  Start fresh.  */
+          /* GC_mark_and_push_stack's WASM path uses GC_add_to_black_list_   */
+          /* normal directly, so any transient interleaving does not shrink  */
+          /* BL_LIMIT or trigger the warning.                                */
+          GC_wasm_pool_base = new_base;
+          GC_wasm_pool_cap  = new_cap;
+          GC_wasm_pool_used = 0;
+        }
+
+        if (GC_wasm_pool_used + bytes <= GC_wasm_pool_cap) {
+          ptr_t result = GC_wasm_pool_base + GC_wasm_pool_used;
+
+          GC_wasm_pool_used += bytes;
+          return result;
+        }
       }
     }
-
-    /* memory.grow failed (linear address space exhausted or pages        */
-    /* argument overflows int); fall back to posix_memalign from the C   */
-    /* runtime heap.  GC_page_size is set to HBLKSIZE (4096 bytes) for  */
-    /* WASM in GC_setpagesize(), guaranteeing the required alignment.    */
-    {
-      void *mem;
-
-      GC_ASSERT(GC_page_size != 0);
-      if (posix_memalign(&mem, GC_page_size, bytes) == 0)
-        return (ptr_t)mem;
-    }
-    return NULL;
   }
+
+  /* Last resort: posix_memalign from the C runtime heap.                   */
+  /* This path is only reached when memory.grow itself fails (address space */
+  /* exhausted), so memory pressure is already critical.                    */
+  {
+    void *mem;
+
+    if (posix_memalign(&mem, GC_page_size, bytes) == 0)
+      return (ptr_t)mem;
+  }
+  return NULL;
+}
 #endif /* WASM */
 
 #if (defined(USE_MUNMAP) || defined(MPROTECT_VDB)) && !defined(USE_WINALLOC)

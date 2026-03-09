@@ -51,15 +51,12 @@ STATIC word GC_total_stack_black_listed = 0;
 
 GC_INNER word GC_black_list_spacing =
 #if defined(WASM)
-                /* On WASM, GC_wasm_get_mem() uses memory.grow to place the   */
-                /* GC heap above the malloc heap, reducing false blacklisting. */
-                /* However, when memory.grow falls back to posix_memalign, GC  */
-                /* and malloc pages share the same address range, producing    */
-                /* false stack-pointer hits.  Start with a larger blacklist    */
-                /* spacing so large allocations (e.g. JS string/array buffers) */
-                /* do not prematurely trigger the "punt" path in              */
-                /* GC_allochblk_nth before GC_promote_black_lists() has had   */
-                /* a chance to calibrate the spacing dynamically.             */
+                /* On WASM, GC_mark_and_push_stack routes all false positives  */
+                /* from shadow-stack scanning to GC_add_to_black_list_normal,  */
+                /* bypassing the stack blacklist entirely.  GC_promote_black_  */
+                /* lists() also enforces a high minimum for WASM.  Start at    */
+                /* MAXHINCR*HBLKSIZE so the "Repeated allocation" warning does */
+                /* not fire before the first collection either.                */
                 MAXHINCR * HBLKSIZE;
 #else
                 MINHINCR * HBLKSIZE;  /* Initial rough guess. */
@@ -168,9 +165,23 @@ GC_INNER void GC_promote_black_lists(void)
         GC_black_list_spacing =
                 HBLKSIZE*(GC_heapsize/GC_total_stack_black_listed);
     }
-    if (GC_black_list_spacing < 3 * HBLKSIZE) {
-        GC_black_list_spacing = 3 * HBLKSIZE;
-    }
+#   if defined(WASM)
+      /* On WASM, GC_mark_and_push_stack routes all false positives from   */
+      /* shadow-stack scanning directly to GC_add_to_black_list_normal,    */
+      /* bypassing the stack blacklist.  GC_total_stack_black_listed should */
+      /* therefore stay at zero and the recalculation above is a no-op.    */
+      /* Maintain a high floor as defense-in-depth: even if some edge-case */
+      /* path adds stack-blacklist entries, BL_LIMIT never falls below      */
+      /* MAXHINCR*HBLKSIZE, so the "Repeated allocation" warning does not  */
+      /* fire for allocations that are well within the heap budget.        */
+      if (GC_black_list_spacing < MAXHINCR * HBLKSIZE) {
+          GC_black_list_spacing = MAXHINCR * HBLKSIZE;
+      }
+#   else
+      if (GC_black_list_spacing < 3 * HBLKSIZE) {
+          GC_black_list_spacing = 3 * HBLKSIZE;
+      }
+#   endif
     if (GC_black_list_spacing > MAXHINCR * HBLKSIZE) {
         GC_black_list_spacing = MAXHINCR * HBLKSIZE;
         /* Makes it easier to allocate really huge blocks, which otherwise */

@@ -1485,12 +1485,59 @@ GC_INNER void
       if (NULL == hhdr
             || (r = (ptr_t)GC_base(p)) == NULL
             || (hhdr = HDR(r)) == NULL) {
-        GC_ADD_TO_BLACK_LIST_STACK(p, source);
+#       if defined(WASM)
+          /* On WASM, a value that falls in the plausible heap range but has  */
+          /* no GC block header is most often a C malloc pointer that happens */
+          /* to sit in the GC address range (from the C/GC heap interleaving  */
+          /* in 32-bit linear memory) or a plain integer that coincidentally  */
+          /* overlaps the heap region.                                        */
+          /*                                                                  */
+          /* GC_ADD_TO_BLACK_LIST_STACK (and, critically, the interior-ptr    */
+          /* routing inside GC_ADD_TO_BLACK_LIST_NORMAL when                  */
+          /* GC_all_interior_pointers=TRUE) both call                         */
+          /* GC_add_to_black_list_stack.  Every such call increments          */
+          /* GC_total_stack_black_listed, which is used by                    */
+          /* GC_promote_black_lists() to shrink GC_black_list_spacing         */
+          /* (BL_LIMIT) down to as low as 3*HBLKSIZE=12KB.  Once BL_LIMIT is */
+          /* small, any allocation larger than BL_LIMIT that triggers even a  */
+          /* modest blacklisted region fires the "Repeated allocation of very */
+          /* large block" warning.                                            */
+          /*                                                                  */
+          /* The Emscripten-based GC path avoids this because                 */
+          /* emscripten_scan_registers only scans the (typically empty)       */
+          /* asyncify save buffer, producing far fewer false positives than   */
+          /* scanning the full C shadow stack.                                */
+          /*                                                                  */
+          /* Fix: call GC_add_to_black_list_normal directly, bypassing the   */
+          /* GC_all_interior_pointers routing.  The normal blacklist is never */
+          /* checked during allocation in the default interior-pointers mode, */
+          /* so BL_LIMIT is unaffected.  With !GC_all_interior_pointers the  */
+          /* normal blacklist IS checked but that is a non-default config.   */
+#         ifdef PRINT_BLACK_LIST
+            GC_add_to_black_list_normal((word)p, source);
+#         else
+            GC_add_to_black_list_normal((word)p);
+#         endif
+#       else
+          GC_ADD_TO_BLACK_LIST_STACK(p, source);
+#       endif /* WASM */
         return;
       }
     }
     if (EXPECT(HBLK_IS_FREE(hhdr), FALSE)) {
+#     if defined(WASM)
+        /* Same reasoning: avoid routing through GC_ADD_TO_BLACK_LIST_NORMAL */
+        /* which calls GC_add_to_black_list_stack when                       */
+        /* GC_all_interior_pointers=TRUE.  Call the normal blacklist function */
+        /* directly so free-block hits don't shrink BL_LIMIT on WASM.       */
+#       ifdef PRINT_BLACK_LIST
+          GC_add_to_black_list_normal((word)p, source);
+#       else
+          GC_add_to_black_list_normal((word)p);
+#       endif
+#     else
         GC_ADD_TO_BLACK_LIST_NORMAL(p, source);
+#     endif /* WASM */
         return;
     }
 #   ifdef THREADS
